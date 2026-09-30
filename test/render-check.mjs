@@ -1,6 +1,6 @@
 /**
  * 离线校验：用最小 React 运行时真机执行 client.js 的注册与渲染路径，
- * 断言高峰判定、节假日判定、倒计时、计价与分时段计价。
+ * 断言峰谷时段判定、节假日判定、倒计时与单价展示，并确认不出现任何消费金额。
  *
  * 运行：node test/render-check.mjs
  */
@@ -27,6 +27,13 @@ function assertMatch(label, haystack, needle) {
   const ok = typeof haystack === 'string' && haystack.indexOf(needle) !== -1;
   if (!ok) failures += 1;
   console.log((ok ? '  ok   ' : '  FAIL ') + label + '  => ' + JSON.stringify(haystack) + (ok ? '' : '  (missing ' + JSON.stringify(needle) + ')'));
+}
+
+function assertAbsent(label, haystack, needle) {
+  checks += 1;
+  const ok = typeof haystack === 'string' && haystack.indexOf(needle) === -1;
+  if (!ok) failures += 1;
+  console.log((ok ? '  ok   ' : '  FAIL ') + label + '  => ' + (ok ? '文本中不含 ' + JSON.stringify(needle) : '意外出现 ' + JSON.stringify(needle)));
 }
 
 /* ================= 最小 React 运行时 ================= */
@@ -93,11 +100,8 @@ function expand(element) {
       if (instance.state === undefined) instance.state = {};
       return expand(instance.render());
     }
-    const frame = enterFrame();
-    const saved = frame.savedChild;
-    const out = type(element.props);
-    frame.savedChild = saved;
-    return expand(out);
+    enterFrame();
+    return expand(type(element.props));
   }
   return { type: type, props: element.props, children: expand(element.children) };
 }
@@ -123,12 +127,8 @@ function findAll(element, predicate, out = []) {
     return out;
   }
   if (predicate(element)) out.push(element);
-  findAll(element.children, preditcateSafe(predicate), out);
+  findAll(element.children, predicate, out);
   return out;
-}
-
-function preditcateSafe(predicate) {
-  return predicate;
 }
 
 /* ================= 加载插件 ================= */
@@ -211,20 +211,15 @@ function loadPlugin(nowMs) {
 }
 
 /* ================= 渲染 ================= */
-const DEFAULT_USAGE = { uncachedInputTokens: 100000, cacheReadTokens: 500000, cacheWriteTokens: 0, outputTokens: 20000 };
 const DEFAULT_SELECTION = { next: { provider: 'deepseek-account', model: 'deepseek-flash' }, lastUsed: null };
 
 function makeProps(options) {
-  const usage = options.usage === undefined ? DEFAULT_USAGE : options.usage;
   const selection = options.selection === undefined ? DEFAULT_SELECTION : options.selection;
-  const nodes = options.nodes === undefined ? [] : options.nodes;
   return {
     useProjection: (key) => {
-      if (key === 'tokenUsage') return usage === null ? undefined : usage;
       if (key === 'modelSelection') return selection === null ? undefined : selection;
       return undefined;
     },
-    useChat: (selector) => selector({ legacy: { nodes } }),
     t: undefined,
     sessionId: 'session-test',
   };
@@ -238,18 +233,7 @@ function renderAt(nowMs, options = {}) {
   for (const key of Object.keys(frames)) delete frames[key];
 
   let tree = null;
-  for (let pass = 0; pass < 30; pass += 1) {
-    for (const key of Object.keys(frames)) frames[key].dirty = false;
-    ordinal = 0;
-    tree = expand(component(props));
-    const dirty = Object.keys(frames).some((k) => frames[k].dirty);
-    if (!dirty) break;
-  }
-
-  if (options.expand === true) {
-    const buttons = findAll(tree, (el) => el.type === 'button' && typeof el.props.className === 'string' && el.props.className.indexOf('dsp_bar') !== -1);
-    if (buttons.length === 0) throw new Error('expanded render: bar button not found');
-    buttons[0].props.onClick();
+  const settle = () => {
     for (let pass = 0; pass < 30; pass += 1) {
       for (const key of Object.keys(frames)) frames[key].dirty = false;
       ordinal = 0;
@@ -257,6 +241,14 @@ function renderAt(nowMs, options = {}) {
       const dirty = Object.keys(frames).some((k) => frames[k].dirty);
       if (!dirty) break;
     }
+  };
+  settle();
+
+  if (options.expand === true) {
+    const buttons = findAll(tree, (el) => el.type === 'button' && typeof el.props.className === 'string' && el.props.className.indexOf('dsp_bar') !== -1);
+    if (buttons.length === 0) throw new Error('expanded render: bar button not found');
+    buttons[0].props.onClick();
+    settle();
   }
 
   return { tree, text: textsOf(tree).join(' | '), ...loaded };
@@ -276,14 +268,19 @@ console.log('\n[1] 2026-09-30 09:53 北京时间（周三工作日上午高峰�
   assertMatch('高峰缓存命中价', text, '缓存命中输入 ¥0.04');
   assertMatch('高峰缓存未命中价', text, '缓存未命中输入 ¥2');
   assertMatch('高峰输出价', text, '输出 ¥8');
-  assertMatch('会话花费 0.38 元', text, '会话花费 ¥0.38');
   assertMatch('倒计时到 12:00', text, '距空闲 2 小时 6 分');
   assertMatch('北京时间行', text, '2026-09-30 周三 09:53:29');
   assertMatch('下一个高峰 14:00', text, '09-30 14:00');
   assertMatch('下一个空闲 12:00', text, '09-30 12:00');
+  assertMatch('今日时段表', text, '高峰 09:00-12:00、14:00-18:00');
   assertMatch('距下一个节假日', text, '国庆节 还有 1 天');
+  assertMatch('下一个节假日具体日期', text, '2026-10-01 国庆节');
+  assertMatch('空闲半价说明', text, '空闲价为高峰价的 50%');
+  assertMatch('高峰档对照', text, '¥0.04 / ¥2 / ¥8');
+  assertMatch('空闲档对照', text, '¥0.02 / ¥1 / ¥4');
+  assertMatch('官方美元价目对照', text, '官方英文价目（当前时段）：$0.006 · $0.3 · $1.2');
   assertMatch('价目来源', text, 'api-docs.deepseek.com');
-  assertMatch('计费口径说明', text, '空闲价 = 高峰价 × 50%');
+  assertMatch('明确声明不计金额', text, '本插件不计算消费金额');
   assertEqual('每次注册的效果都返回清理函数', effectReturns.every((v) => typeof v === 'function'), true);
 }
 
@@ -296,8 +293,8 @@ console.log('\n[2] 2026-09-30 12:30 北京时间（工作日午休，空闲半�
   assertMatch('空闲缓存命中价', text, '缓存命中输入 ¥0.02');
   assertMatch('空闲缓存未命中价', text, '缓存未命中输入 ¥1');
   assertMatch('空闲输出价', text, '输出 ¥4');
-  assertMatch('花费减半', text, '会话花费 ¥0.19');
   assertMatch('距高峰 1 小时 30 分', text, '距高峰 1 小时 30 分');
+  assertMatch('空闲档美元价', text, '$0.003 · $0.15 · $0.6');
 }
 
 console.log('\n[3] 2026-10-01 10:00 北京时间（国庆节，法定节假日 -> 全天空闲）');
@@ -307,6 +304,7 @@ console.log('\n[3] 2026-10-01 10:00 北京时间（国庆节，法定节假日 -
   assertMatch('空闲标记', text, '空闲时段');
   assertMatch('节假日原因', text, '国庆节 · 法定节假日全天');
   assertMatch('今天是节假日', text, '今天是国庆节');
+  assertMatch('今日全天空闲', text, '全天空闲 —— 国庆节');
   assertMatch('空闲价', text, '缓存未命中输入 ¥1');
 }
 
@@ -316,6 +314,7 @@ console.log('\n[4] 2026-10-10 10:00 北京时间（周六调休上班日，周�
   const { text } = renderAt(at, { expand: true });
   assertMatch('空闲标记', text, '空闲时段');
   assertMatch('周末原因', text, '周末全天');
+  assertMatch('今日全天空闲（周末）', text, '全天空闲 —— 周末全天');
 }
 
 console.log('\n[5] 2026-09-30 08:00 北京时间（工作日 09:00 前，空闲）');
@@ -345,7 +344,7 @@ console.log('\n[7] deepseek-v4-pro 高峰单价');
   assertMatch('pro 模型', text, 'deepseek-v4-pro');
   assertMatch('pro 高峰未命中价 9', text, '缓存未命中输入 ¥9');
   assertMatch('pro 高峰输出价 27', text, '输出 ¥27');
-  assertMatch('pro 花费 ¥1.59', text, '会话花费 ¥1.59');
+  assertMatch('pro 缓存命中价 0.3', text, '缓存命中输入 ¥0.3');
 }
 
 console.log('\n[8] 旧模型名 deepseek-v4-flash 归一到 Flash 价');
@@ -358,52 +357,24 @@ console.log('\n[8] 旧模型名 deepseek-v4-flash 归一到 Flash 价');
   assertMatch('Flash 高峰价', text, '缓存未命中输入 ¥2');
 }
 
-console.log('\n[9] 会话跨越时段边界 -> 按各步完成时刻分时段计价');
-{
-  const at = Date.parse('2026-09-30T15:00:00+08:00');
-  const nodes = [
-    { kind: 'assistant', turn: 1, timing: { completedTime: Date.parse('2026-09-30T10:00:00+08:00') }, usage: { inputTokens: 1000000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-    { kind: 'assistant', turn: 2, timing: { completedTime: Date.parse('2026-09-30T12:30:00+08:00') }, usage: { inputTokens: 1000000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-  ];
-  const usage = { uncachedInputTokens: 2000000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 };
-  const { text } = renderAt(at, { expand: true, nodes, usage });
-  assertMatch('高峰 1M 未命中 = ¥2', text, '高峰时段 | 1.00M tokens · ¥2.00');
-  assertMatch('空闲 1M 未命中 = ¥1', text, '空闲时段 | 1.00M tokens · ¥1.00');
-  assertMatch('合计 ¥3', text, '会话花费 ¥3.00');
-  assertMatch('分时段精确标记', text, '按各步完成时刻分段计价');
-}
-
-console.log('\n[10] 窗口节点不完整时回退为按当前时段估算');
-{
-  const at = Date.parse('2026-09-30T15:00:00+08:00');
-  const nodes = [
-    { kind: 'assistant', turn: 1, timing: { completedTime: Date.parse('2026-09-30T10:00:00+08:00') }, usage: { inputTokens: 100000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-  ];
-  const usage = { uncachedInputTokens: 2000000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 };
-  const { text } = renderAt(at, { expand: true, nodes, usage });
-  assertMatch('估算标记', text, '按当前时段单价整体估算');
-  assertMatch('按下午高峰估价 2M × ¥2 = ¥4', text, '会话花费 ¥4.00');
-}
-
-console.log('\n[11] 无 tokenUsage 投影时仍可渲染');
+console.log('\n[9] 无 modelSelection 投影时用默认模型，仍可渲染');
 {
   const at = Date.parse('2026-09-30T09:53:29+08:00');
-  const { text } = renderAt(at, { usage: null, selection: null });
+  const { text } = renderAt(at, { expand: true, selection: null });
   assertMatch('默认模型', text, 'deepseek-flash');
-  assertMatch('零花费', text, '会话花费 ¥0.0000');
+  assertMatch('默认模型说明', text, '默认模型，会话尚未发起请求');
 }
 
-console.log('\n[12] 非 DeepSeek 路由提示');
+console.log('\n[10] 非 DeepSeek 路由提示');
 {
   const at = Date.parse('2026-09-30T09:53:29+08:00');
   const { text } = renderAt(at, {
     selection: { next: { provider: 'pi-ai', model: 'some-other-model' }, lastUsed: null },
   });
   assertMatch('非 DeepSeek 提示', text, '未检测到 DeepSeek 路由');
-  assertMatch('不估价', text, '会话花费 ¥0.0000');
 }
 
-console.log('\n[13] 未收录模型仍按 Flash 估价并提示');
+console.log('\n[11] 未收录模型仍按 Flash 展示并提示');
 {
   const at = Date.parse('2026-09-30T09:53:29+08:00');
   const { text } = renderAt(at, {
@@ -412,6 +383,27 @@ console.log('\n[13] 未收录模型仍按 Flash 估价并提示');
   });
   assertMatch('未收录提示', text, '该模型未收录价目');
   assertMatch('按 Flash 计', text, '缓存未命中输入 ¥2');
+}
+
+console.log('\n[12] 任何状态下都不出现消费金额');
+{
+  const cases = ['2026-09-30T09:53:29+08:00', '2026-09-30T12:30:00+08:00', '2026-10-01T10:00:00+08:00'];
+  for (const iso of cases) {
+    const { text } = renderAt(Date.parse(iso), { expand: true });
+    for (const banned of ['会话花费', '已花', '花费 ¥', '共 ¥', '总费用']) {
+      assertAbsent('不含「' + banned + '」@' + iso, text, banned);
+    }
+  }
+}
+
+console.log('\n[13] 折叠态只显示一条精简信息');
+{
+  const at = Date.parse('2026-09-30T09:53:29+08:00');
+  const { text } = renderAt(at);
+  assertMatch('折叠态含时段', text, '高峰时段');
+  assertMatch('折叠态含单价', text, '缓存未命中输入 ¥2');
+  assertMatch('折叠态含倒计时', text, '距空闲');
+  assertAbsent('折叠态不含详情面板', text, '本插件不计算消费金额');
 }
 
 console.log('\n---- 共 ' + checks + ' 项检查，失败 ' + failures + ' 项 ----');

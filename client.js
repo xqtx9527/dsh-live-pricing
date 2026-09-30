@@ -1,23 +1,26 @@
 /**
- * DeepSeek 实时价格 / 时段 / 节假日 / 会话消耗 —— Client half。
+ * DeepSeek 峰谷时段 / 节假日 / 实时单价条 —— Client half。
  *
  * 渲染到会话输入框下方的 `conversation.composer.dock` 席位（与官方统计条并列），
- * 每秒刷新一次时钟与倒计时，并随会话投影变化实时更新花费。
+ * 每秒刷新一次时钟与倒计时。
  *
- * 它回答四件事：
+ * 它回答三件事：
  *   1. 现在（北京时间）是高峰时段还是空闲时段，下一次切换还有多久；
  *   2. 今天是不是中国法定节假日，距下一个节假日还有多久；
- *   3. 当前模型此刻生效的实时单价（缓存命中输入 / 缓存未命中输入 / 输出）；
- *   4. 本次会话已经花掉多少钱（按 token 分桶逐项计价）。
+ *   3. 当前模型此刻生效的实时单价（缓存命中输入 / 缓存未命中输入 / 输出）。
  *
- * 价目来源：DeepSeek 官方 API 文档《模型 & 价格》
- *   https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+ * **本插件不计算、不显示任何消费金额。** 金额口径涉及币种、汇率、峰谷加权与平台
+ * 账单细节，极易与实际账单对不上；这里只显示不依赖用量的"费率"，以及不依赖网络
+ * 与账号的"时段"。想知道一共花了多少钱，请用官方用量页或专门的计费插件。
+ *
+ * 价目来源：
+ *   官方机器可读表 —— DSH 内置的 @earendil-works/pi-ai/dist/providers/data/deepseek.json（USD / 百万 token）
+ *   官方文档价目 —— https://api-docs.deepseek.com/zh-cn/quick_start/pricing/（人民币 / 百万 token）
  * 规则：高峰时段 = 北京时间 周一至周五（不含中国法定节假日）
  *       09:00-12:00 与 14:00-18:00；其余时段（含周末与法定节假日全天）
- *       为空闲时段，空闲价 = 高峰价的 50%。
+ *       为空闲时段，空闲价 = 高峰价 × 50%。
  *
- * 会话 token 用量来自内置的 `tokenUsage` 会话投影（整段日志折叠，分页/压缩不影响），
- * 当前模型来自 `modelSelection` 会话投影。
+ * 当前模型来自内置的 `modelSelection` 会话投影。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-live-pricing',
@@ -28,20 +31,20 @@ window.__ModuleLoader__.load({
     const NS = 'deepseek-pricing';
 
     /* ==================================================================
-     * 1. 价目表（人民币 / 每百万 tokens）
+     * 1. 价目表（高峰价；空闲价 = 高峰价 × 50%）
+     *    usd 取自 DSH 内置的 pi-ai 官方 provider 数据；
+     *    cny 取自官方中文价目页。
      * ================================================================== */
     const PRICE_TABLE = {
       'deepseek-flash': {
         label: 'DeepSeek-V4.1-Flash',
-        cacheHit: { peak: 0.04, offPeak: 0.02 },
-        cacheMiss: { peak: 2.0, offPeak: 1.0 },
-        output: { peak: 8.0, offPeak: 4.0 },
+        usd: { hit: 0.006, miss: 0.3, out: 1.2 },
+        cny: { hit: 0.04, miss: 2, out: 8 },
       },
       'deepseek-v4-pro': {
         label: 'DeepSeek-V4-Pro',
-        cacheHit: { peak: 0.3, offPeak: 0.15 },
-        cacheMiss: { peak: 9.0, offPeak: 4.5 },
-        output: { peak: 27.0, offPeak: 13.5 },
+        usd: { hit: 0.044, miss: 1.32, out: 3.96 },
+        cny: { hit: 0.3, miss: 9, out: 27 },
       },
     };
     /** 官方文档点名的旧模型名，仍按 Flash 计费。 */
@@ -51,7 +54,7 @@ window.__ModuleLoader__.load({
     };
     const DEFAULT_MODEL = 'deepseek-flash';
     const PRICE_SOURCE = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/';
-    const PRICE_CHECKED_AT = '2026-09-30';
+    const PRICE_CHECKED_AT = '2026-10-01';
 
     /* ==================================================================
      * 2. 中国法定节假日（2026，国办发明电〔2025〕7 号）
@@ -129,7 +132,7 @@ window.__ModuleLoader__.load({
       return false;
     }
 
-    /** 下一次「高峰 <-> 空闲」状态翻转的时刻。 */
+    /** 下一次「高峰 / 空闲」状态翻转的时刻。 */
     function nextBandChange(ms) {
       const current = isPeakInstant(ms);
       const p = beijingParts(ms);
@@ -172,7 +175,7 @@ window.__ModuleLoader__.load({
       return null;
     }
 
-    /** 当前时段画像：高峰与否、节假日、周末、以及"为什么"。 */
+    /** 当前时段画像：高峰与否、节假日、周末、以及「为什么」。 */
     function phaseOf(ms) {
       const p = beijingParts(ms);
       const key = dayKey(p);
@@ -193,9 +196,22 @@ window.__ModuleLoader__.load({
         weekend: weekend,
         reason: reason,
         dateKey: key,
-        clock:
-          pad2(p.hh) + ':' + pad2(p.mi) + ':' + pad2(p.sec),
+        clock: pad2(p.hh) + ':' + pad2(p.mi) + ':' + pad2(p.sec),
         dateText: key + ' 周' + '日一二三四五六'.charAt(p.wd),
+      };
+    }
+
+    /** 今天全天的时段划分，用于「今日时段」。 */
+    function todaySchedule(ms) {
+      const p = beijingParts(ms);
+      const key = dayKey(p);
+      const holidayName = HOLIDAYS.get(key) || null;
+      if (holidayName !== null) return { allOff: true, reason: holidayName };
+      if (p.wd === 0 || p.wd === 6) return { allOff: true, reason: 'weekend' };
+      return {
+        allOff: false,
+        peakText: '09:00-12:00、14:00-18:00',
+        offText: '00:00-09:00、12:00-14:00、18:00-24:00',
       };
     }
 
@@ -216,7 +232,7 @@ window.__ModuleLoader__.load({
     }
 
     /* ==================================================================
-     * 4. 计价
+     * 4. 模型与单价
      * ================================================================== */
     function resolveModel(selection) {
       const chosen = selection && (selection.next || selection.lastUsed);
@@ -227,101 +243,37 @@ window.__ModuleLoader__.load({
           : chosen.model;
         return {
           id: id,
-          raw: chosen.model,
           provider: provider,
           isDeepSeek: provider.indexOf('deepseek') !== -1,
           known: Object.prototype.hasOwnProperty.call(PRICE_TABLE, id),
+          assumed: false,
         };
       }
-      return { id: DEFAULT_MODEL, raw: DEFAULT_MODEL, provider: '', isDeepSeek: true, known: true, assumed: true };
+      return { id: DEFAULT_MODEL, provider: '', isDeepSeek: true, known: true, assumed: true };
     }
 
-    function priceBand(modelId, peak) {
+    function halve(price) {
+      return { hit: price.hit / 2, miss: price.miss / 2, out: price.out / 2 };
+    }
+
+    function priceOf(modelId, peak) {
       const entry = Object.prototype.hasOwnProperty.call(PRICE_TABLE, modelId)
         ? PRICE_TABLE[modelId]
         : PRICE_TABLE[DEFAULT_MODEL];
-      const band = peak ? 'peak' : 'offPeak';
       return {
         label: entry.label,
-        cacheHit: entry.cacheHit[band],
-        cacheMiss: entry.cacheMiss[band],
-        output: entry.output[band],
+        cny: peak ? entry.cny : halve(entry.cny),
+        usd: peak ? entry.usd : halve(entry.usd),
         peak: peak,
       };
-    }
-
-    function zeroBuckets() {
-      return { uncachedInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 };
-    }
-
-    function numberOr0(value) {
-      return typeof value === 'number' && isFinite(value) && value > 0 ? value : 0;
-    }
-
-    /** 缓存未命中输入 = 未缓存输入 + 缓存写入（DeepSeek 按未命中价计费）。 */
-    function bucketCost(buckets, price) {
-      const missInput = buckets.uncachedInputTokens + buckets.cacheWriteTokens;
-      return (
-        (buckets.cacheReadTokens / 1e6) * price.cacheHit +
-        (missInput / 1e6) * price.cacheMiss +
-        (buckets.outputTokens / 1e6) * price.output
-      );
-    }
-
-    function addBuckets(target, usage) {
-      target.uncachedInputTokens += numberOr0(usage.inputTokens);
-      target.cacheReadTokens += numberOr0(usage.cacheReadTokens);
-      target.cacheWriteTokens += numberOr0(usage.cacheWriteTokens);
-      target.outputTokens += numberOr0(usage.outputTokens);
-    }
-
-    function bucketsTotal(b) {
-      return b.uncachedInputTokens + b.cacheReadTokens + b.cacheWriteTokens + b.outputTokens;
-    }
-
-    /**
-     * 按「模型步完成的时刻」把用量拆到高峰 / 空闲两段，这样跨越时段边界的长会话
-     * 也能按当时生效的单价计价。窗口被分页时节点不完整，调用方会用投影总量兜底。
-     */
-    function splitByBand(nodes) {
-      if (!Array.isArray(nodes)) return null;
-      const peak = zeroBuckets();
-      const offPeak = zeroBuckets();
-      let seen = 0;
-      for (let i = 0; i < nodes.length; i += 1) {
-        const node = nodes[i];
-        if (!node || node.kind !== 'assistant' || !node.usage) continue;
-        const timing = node.timing;
-        const at = timing && typeof timing.completedTime === 'number' ? timing.completedTime : null;
-        if (at === null) continue;
-        addBuckets(isPeakInstant(at) ? peak : offPeak, node.usage);
-        seen += 1;
-      }
-      if (seen === 0) return null;
-      return { peak: peak, offPeak: offPeak, steps: seen };
     }
 
     /* ==================================================================
      * 5. 格式化
      * ================================================================== */
-    function money(value) {
+    function priceText(value) {
       if (typeof value !== 'number' || !isFinite(value)) return '--';
-      if (value === 0) return '¥0.0000';
-      if (value < 0.01) return '¥' + value.toFixed(6);
-      if (value < 1) return '¥' + value.toFixed(4);
-      return '¥' + value.toFixed(2);
-    }
-
-    function unitPrice(value) {
-      if (typeof value !== 'number' || !isFinite(value)) return '--';
-      return '¥' + String(value);
-    }
-
-    function tokens(count) {
-      if (typeof count !== 'number' || !isFinite(count)) return '0';
-      if (count < 1000) return String(Math.round(count));
-      if (count < 1e6) return (count / 1000).toFixed(count < 1e4 ? 2 : 1) + 'K';
-      return (count / 1e6).toFixed(2) + 'M';
+      return String(value);
     }
 
     function duration(ms) {
@@ -339,11 +291,6 @@ window.__ModuleLoader__.load({
       return pad2(p.mo) + '-' + pad2(p.day) + ' ' + pad2(p.hh) + ':' + pad2(p.mi);
     }
 
-    function countdownOf(ms, nowMs) {
-      if (ms === null) return '--';
-      return duration(ms - nowMs);
-    }
-
     /* ==================================================================
      * 6. 样式（只用宿主主题 token）
      * ================================================================== */
@@ -359,8 +306,7 @@ window.__ModuleLoader__.load({
       '.dsp_model{flex:none;color:var(--dsw-alias-label-primary);font-weight:500}',
       '.dsp_prices{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}',
       '.dsp_grow{flex:1 1 auto;min-width:0}',
-      '.dsp_cost{flex:none;color:var(--dsw-alias-label-primary);font-weight:500;font-variant-numeric:tabular-nums}',
-      '.dsp_countdown{flex:none;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
+      '.dsp_countdown{flex:none;color:var(--dsw-alias-label-primary);font-weight:500;font-variant-numeric:tabular-nums}',
       '.dsp_details{margin-top:6px;padding:8px 12px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);border:0.5px solid var(--dsw-alias-border-l1)}',
       '.dsp_grid{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 14px;margin:0}',
       '.dsp_grid dt{color:var(--dsw-alias-label-secondary);white-space:nowrap}',
@@ -390,36 +336,36 @@ window.__ModuleLoader__.load({
       'label.reason': '时段原因',
       'label.nextPeak': '下一个高峰',
       'label.nextOff': '下一个空闲',
+      'label.today': '今日时段',
       'label.holiday': '法定节假日',
-      'label.model': '当前模型',
-      'label.unitPrice': '实时单价',
-      'label.usage': '会话 tokens',
-      'label.cost': '会话花费',
-      'label.split': '分时段计价',
       'label.nextHoliday': '下一个节假日',
+      'label.model': '当前模型',
+      'label.unitPrice': '实时单价（当前时段）',
+      'label.bothBands': '高峰 / 空闲 两档对照',
       'label.source': '价目来源',
       'holiday.today': '今天是',
       'holiday.none': '今天不是节假日，距 ',
       'holiday.unknown': '今天不是节假日（价目表未覆盖之后的节假日）',
       'holiday.after': ' 还有 ',
       'holiday.days': ' 天',
+      'today.allOff': '全天空闲 —— ',
+      'today.peakIs': '高峰 ',
+      'today.offIs': '；空闲 ',
       'price.hit': '缓存命中输入',
       'price.miss': '缓存未命中输入',
       'price.out': '输出',
-      'perMillion': ' / 百万 tokens',
-      'usage.read': '缓存读',
-      'usage.miss': '未命中输入',
-      'usage.write': '缓存写入',
-      'usage.out': '输出',
-      'split.exact': '按各步完成时刻分段计价',
-      'split.estimate': '窗口内节点不完整，按当前时段单价整体估算',
-      'split.none': '暂无用量记录',
-      'note.billing': '计费口径：缓存未命中输入 = 未缓存输入 + 缓存写入；空闲价 = 高峰价 × 50%。',
-      'note.free': '未检测到 DeepSeek 路由，暂不计价。',
+      'perMillion': ' 元 / 百万 tokens',
+      'order': '顺序：缓存命中 / 缓存未命中 / 输出',
+      'usdPrefix': '官方英文价目（当前时段）：',
+      'usdSuffix': ' 美元 / 百万 tokens',
+      'split.half': '空闲价为高峰价的 50%',
+      'checked': '价格核对时间 ' + PRICE_CHECKED_AT,
+      'noCostTitle': '本插件不计算消费金额',
+      'noCostBody': '金额口径涉及币种、汇率、峰谷加权与平台账单细节，容易与官方账单对不上。想知道一共花了多少钱，请用官方用量页或专门的计费插件。',
+      'note.free': '未检测到 DeepSeek 路由，以下单价仅供参考。',
       'note.unknownModel': '该模型未收录价目，以下按 ' + DEFAULT_MODEL + ' 计。',
       'assumed': '（默认模型，会话尚未发起请求）',
-      'checked': '价格核对时间 ' + PRICE_CHECKED_AT,
-      'misc.title': 'DeepSeek 实时价格',
+      'misc.title': 'DeepSeek 峰谷时段与实时单价',
     };
     const EN = {
       'band.peak': 'Peak',
@@ -437,44 +383,43 @@ window.__ModuleLoader__.load({
       'label.reason': 'Why',
       'label.nextPeak': 'Next peak',
       'label.nextOff': 'Next off-peak',
+      'label.today': 'Today',
       'label.holiday': 'Holiday',
-      'label.model': 'Model',
-      'label.unitPrice': 'Live unit price',
-      'label.usage': 'Session tokens',
-      'label.cost': 'Session cost',
-      'label.split': 'Band split',
       'label.nextHoliday': 'Next holiday',
+      'label.model': 'Model',
+      'label.unitPrice': 'Live unit price (current band)',
+      'label.bothBands': 'Peak / off-peak',
       'label.source': 'Price source',
       'holiday.today': 'Today is ',
       'holiday.none': 'Not a holiday; ',
       'holiday.unknown': 'Not a holiday (no later holiday in the price table yet)',
       'holiday.after': ' in ',
       'holiday.days': ' days',
+      'today.allOff': 'Off-peak all day — ',
+      'today.peakIs': 'Peak ',
+      'today.offIs': '; off-peak ',
       'price.hit': 'cache-hit input',
       'price.miss': 'cache-miss input',
       'price.out': 'output',
-      'perMillion': ' / 1M tokens',
-      'usage.read': 'cache read',
-      'usage.miss': 'uncached input',
-      'usage.write': 'cache write',
-      'usage.out': 'output',
-      'split.exact': 'priced per step completion time',
-      'split.estimate': 'window incomplete; estimated at the current band rate',
-      'split.none': 'no usage recorded yet',
-      'note.billing': 'Billing: cache-miss input = uncached input + cache write; off-peak = 50% of peak.',
-      'note.free': 'No DeepSeek route detected; cost is not estimated.',
+      'perMillion': ' CNY / 1M tokens',
+      'order': 'order: cache hit / cache miss / output',
+      'usdPrefix': 'Official USD list (current band): ',
+      'usdSuffix': ' USD / 1M tokens',
+      'split.half': 'off-peak is 50% of peak',
+      'checked': 'checked ' + PRICE_CHECKED_AT,
+      'noCostTitle': 'No spend is computed',
+      'noCostBody': 'Money figures depend on currency, FX rate, band weighting and billing details, so they easily disagree with the official bill. Use the official usage page or a dedicated billing plugin for spend.',
+      'note.free': 'No DeepSeek route detected; prices are for reference only.',
       'note.unknownModel': 'Unknown model; priced as ' + DEFAULT_MODEL + '.',
       'assumed': ' (default model, no request yet)',
-      'checked': 'Prices checked ' + PRICE_CHECKED_AT,
-      'misc.title': 'DeepSeek live pricing',
+      'misc.title': 'DeepSeek peak / off-peak and live unit price',
     };
 
     /* ==================================================================
      * 8. 组件
      * ================================================================== */
-    function PricingBar(props) {
+    function BandBar(props) {
       const useProjection = props.useProjection;
-      const useChat = props.useChat;
       const t = props.t;
       const [now, setNow] = React.useState(function () {
         return Date.now();
@@ -490,21 +435,11 @@ window.__ModuleLoader__.load({
         };
       }, []);
 
-      const usage = useProjection ? useProjection('tokenUsage') : undefined;
       const selection = useProjection ? useProjection('modelSelection') : undefined;
-      const nodes = useChat
-        ? useChat(function (state) {
-            return state && state.legacy ? state.legacy.nodes : undefined;
-          })
-        : undefined;
 
       const model = React.useMemo(function () {
         return resolveModel(selection);
       }, [selection]);
-
-      const split = React.useMemo(function () {
-        return splitByBand(nodes);
-      }, [nodes]);
 
       let tr = function (key) {
         return Object.prototype.hasOwnProperty.call(ZH, key) ? ZH[key] : key;
@@ -523,35 +458,14 @@ window.__ModuleLoader__.load({
       }
 
       const phase = phaseOf(now);
-      const price = priceBand(model.id, phase.peak);
+      const peakPrice = priceOf(model.id, true);
+      const offPrice = priceOf(model.id, false);
+      const price = phase.peak ? peakPrice : offPrice;
       const change = nextBandChange(now);
       const nextPeak = nextBandStart(now, true);
       const nextOff = nextBandStart(now, false);
       const holiday = nextHoliday(now);
-
-      const totals = usage
-        ? {
-            uncachedInputTokens: numberOr0(usage.uncachedInputTokens),
-            cacheReadTokens: numberOr0(usage.cacheReadTokens),
-            cacheWriteTokens: numberOr0(usage.cacheWriteTokens),
-            outputTokens: numberOr0(usage.outputTokens),
-          }
-        : zeroBuckets();
-
-      // 分时段精确计价：窗口节点合计与整段会话投影一致时采用，否则按当前时段估算。
-      let cost = bucketCost(totals, price);
-      let costMode = 'estimate';
-      if (split !== null) {
-        const splitTotal = bucketsTotal(split.peak) + bucketsTotal(split.offPeak);
-        const projectionTotal = bucketsTotal(totals);
-        if (projectionTotal > 0 && Math.abs(splitTotal - projectionTotal) <= Math.max(1, projectionTotal * 0.001)) {
-          cost =
-            bucketCost(split.peak, priceBand(model.id, true)) +
-            bucketCost(split.offPeak, priceBand(model.id, false));
-          costMode = 'exact';
-        }
-      }
-      if (!model.isDeepSeek) cost = 0;
+      const schedule = todaySchedule(now);
 
       const countdownText =
         change === null
@@ -588,70 +502,54 @@ window.__ModuleLoader__.load({
           { className: 'dsp_prices' },
           model.isDeepSeek
             ? tr('price.hit') +
-                ' ' +
-                unitPrice(price.cacheHit) +
+                ' ¥' +
+                priceText(price.cny.hit) +
                 ' · ' +
                 tr('price.miss') +
-                ' ' +
-                unitPrice(price.cacheMiss) +
+                ' ¥' +
+                priceText(price.cny.miss) +
                 ' · ' +
                 tr('price.out') +
-                ' ' +
-                unitPrice(price.output) +
+                ' ¥' +
+                priceText(price.cny.out) +
                 tr('perMillion')
             : tr('note.free'),
         ),
         h('span', { className: 'dsp_grow' }),
-        h('span', { className: 'dsp_cost' }, tr('label.cost') + ' ' + money(cost)),
         countdownText === '' ? null : h('span', { className: 'dsp_countdown' }, countdownText),
       );
 
       if (!open) return h('div', { className: 'dsp_root' }, bar);
+
+      const todayText = schedule.allOff
+        ? tr('today.allOff') + (schedule.reason === 'weekend' ? tr('reason.weekend') : schedule.reason)
+        : tr('today.peakIs') + schedule.peakText + tr('today.offIs') + schedule.offText;
+
+      const holidayText =
+        phase.holidayName !== null
+          ? tr('holiday.today') + phase.holidayName
+          : holiday === null
+            ? tr('holiday.unknown')
+            : holiday.name + tr('holiday.after') + holiday.days + tr('holiday.days');
 
       const detailRows = [
         [tr('label.beijing'), phase.dateText + ' ' + phase.clock],
         [tr('label.reason'), reasonText + ' → ' + chipText],
         [
           change === null ? tr('label.toOff') : change.becomesPeak ? tr('label.toPeak') : tr('label.toOff'),
-          countdownOf(change === null ? null : change.at, now),
+          change === null ? '--' : duration(change.at - now),
         ],
         [tr('label.nextPeak'), nextPeak === null ? '--' : clockOf(nextPeak)],
         [tr('label.nextOff'), nextOff === null ? '--' : clockOf(nextOff)],
-        [
-          tr('label.holiday'),
-          phase.holidayName !== null
-            ? tr('holiday.today') + phase.holidayName
-            : holiday === null
-              ? tr('holiday.unknown')
-              : tr('holiday.none') + holiday.name + tr('holiday.after') + holiday.days + tr('holiday.days'),
-        ],
+        [tr('label.today'), todayText],
+        [tr('label.holiday'), holidayText],
+        [tr('label.nextHoliday'), holiday === null ? '--' : holiday.key + ' ' + holiday.name],
         [tr('label.model'), model.id + '（' + price.label + '）' + (model.assumed ? tr('assumed') : '')],
       ];
 
-      const usageRows = [
-        [tr('usage.read'), tokens(totals.cacheReadTokens) + ' · ' + unitPrice(price.cacheHit) + tr('perMillion')],
-        [
-          tr('usage.miss'),
-          tokens(totals.uncachedInputTokens + totals.cacheWriteTokens) + ' · ' + unitPrice(price.cacheMiss) + tr('perMillion'),
-        ],
-        [tr('usage.write'), tokens(totals.cacheWriteTokens)],
-        [tr('usage.out'), tokens(totals.outputTokens) + ' · ' + unitPrice(price.output) + tr('perMillion')],
-      ];
-
-      const splitRows = [];
-      let splitNote = tr('split.estimate');
-      if (costMode === 'exact' && split !== null) {
-        splitRows.push([
-          tr('band.peak'),
-          tokens(bucketsTotal(split.peak)) + ' tokens · ' + money(bucketCost(split.peak, priceBand(model.id, true))),
-        ]);
-        splitRows.push([
-          tr('band.off'),
-          tokens(bucketsTotal(split.offPeak)) + ' tokens · ' + money(bucketCost(split.offPeak, priceBand(model.id, false))),
-        ]);
-      } else if (split === null) {
-        splitNote = tr('split.none');
-      }
+      const triple = function (band) {
+        return '¥' + priceText(band.cny.hit) + ' / ¥' + priceText(band.cny.miss) + ' / ¥' + priceText(band.cny.out);
+      };
 
       const details = h(
         'div',
@@ -666,29 +564,50 @@ window.__ModuleLoader__.load({
         h(
           'dl',
           { className: 'dsp_row' },
-          h('div', { className: 'dsp_rowTitle' }, tr('label.unitPrice')),
-          usageRows.map(function (row, index) {
-            return [h('dt', { key: 'k' + index }, row[0]), h('dd', { key: 'v' + index }, row[1])];
-          }),
+          h('div', { className: 'dsp_rowTitle' }, tr('label.unitPrice') + ' · ' + chipText),
+          h('dt', null, tr('price.hit')),
+          h('dd', null, '¥' + priceText(price.cny.hit) + tr('perMillion')),
+          h('dt', null, tr('price.miss')),
+          h('dd', null, '¥' + priceText(price.cny.miss) + tr('perMillion')),
+          h('dt', null, tr('price.out')),
+          h('dd', null, '¥' + priceText(price.cny.out) + tr('perMillion')),
+          h('dt', { className: 'dsp_note' }, tr('split.half')),
         ),
         h(
           'dl',
           { className: 'dsp_row' },
-          h('div', { className: 'dsp_rowTitle' }, tr('label.split') + ' · ' + (costMode === 'exact' ? tr('split.exact') : splitNote)),
-          splitRows.length === 0
-            ? h('div', { className: 'dsp_note' }, splitNote)
-            : splitRows.map(function (row, index) {
-                return [h('dt', { key: 'k' + index }, row[0]), h('dd', { key: 'v' + index }, row[1])];
-              }),
+          h('div', { className: 'dsp_rowTitle' }, tr('label.bothBands')),
+          h('dt', null, tr('band.peak')),
+          h('dd', null, triple(peakPrice)),
+          h('dt', null, tr('band.off')),
+          h('dd', null, triple(offPrice)),
+          h('dt', { className: 'dsp_note' }, tr('order')),
+          h(
+            'dt',
+            { className: 'dsp_note' },
+            tr('usdPrefix') +
+              '$' +
+              priceText(price.usd.hit) +
+              ' · $' +
+              priceText(price.usd.miss) +
+              ' · $' +
+              priceText(price.usd.out) +
+              tr('usdSuffix'),
+          ),
         ),
         h(
           'dl',
           { className: 'dsp_row' },
           h('div', { className: 'dsp_rowTitle' }, tr('label.source')),
           h('dt', { className: 'dsp_note' }, PRICE_SOURCE + ' · ' + tr('checked')),
-          h('dt', { className: 'dsp_note' }, tr('note.billing')),
           model.isDeepSeek ? null : h('dt', { className: 'dsp_note dsp_err' }, tr('note.free')),
           model.known ? null : h('dt', { className: 'dsp_note' }, tr('note.unknownModel')),
+        ),
+        h(
+          'dl',
+          { className: 'dsp_row' },
+          h('div', { className: 'dsp_rowTitle' }, tr('noCostTitle')),
+          h('dt', { className: 'dsp_note' }, tr('noCostBody')),
         ),
       );
 
@@ -720,7 +639,7 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'dsp_details dsp_err' },
-              'DeepSeek 实时价格渲染失败：' + String((this.state.error && this.state.error.message) || this.state.error),
+              'DeepSeek 时段条渲染失败：' + String((this.state.error && this.state.error.message) || this.state.error),
             ),
           );
         }
@@ -728,15 +647,15 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function PricingDock(props) {
-      return h(Boundary, null, h(PricingBar, props));
+    function BandDock(props) {
+      return h(Boundary, null, h(BandBar, props));
     }
 
     /* ==================================================================
      * 9. 插件入口
      * ================================================================== */
     function apply(ctx) {
-      // 1) 席位注册放在最前：样式或词典这一步出问题也不该让价格条消失。
+      // 席位注册放在最前：样式或词典出问题也不该让时段条消失。
       ctx.slots.inject('conversation.composer.dock', function () {
         return ctx.slots.register(
           {
@@ -745,11 +664,10 @@ window.__ModuleLoader__.load({
             order: 5,
             locale: NS,
           },
-          PricingDock,
+          BandDock,
         );
       });
 
-      // 2) 样式表（随插件卸载移除）。
       try {
         ctx.effect(function () {
           const tag = document.createElement('style');
@@ -764,7 +682,6 @@ window.__ModuleLoader__.load({
         if (typeof console !== 'undefined' && console.error) console.error('[deepseek-pricing] style registration failed', error);
       }
 
-      // 3) 界面文案词典；缺失时组件内部回退到内置中文。
       try {
         if (ctx.locale && typeof ctx.locale.register === 'function') {
           ctx.effect(function () {
