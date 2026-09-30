@@ -278,9 +278,12 @@ window.__ModuleLoader__.load({
 
     function duration(ms) {
       const total = Math.max(0, Math.round(ms / 1000));
-      const hh = Math.floor(total / 3600);
+      const dd = Math.floor(total / 86400);
+      const hh = Math.floor((total % 86400) / 3600);
       const mm = Math.floor((total % 3600) / 60);
       const ss = total % 60;
+      // 长假期间"距高峰"会跨越好几天，所以先报天，避免出现"169 小时"这种读不出来的数。
+      if (dd > 0) return dd + ' 天 ' + hh + ' 小时';
       if (hh > 0) return hh + ' 小时 ' + mm + ' 分';
       if (mm > 0) return mm + ' 分 ' + ss + ' 秒';
       return ss + ' 秒';
