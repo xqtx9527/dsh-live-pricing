@@ -76,22 +76,21 @@ DeepSeek Harness（DSH）的**实时价格条**：在输入框下方常驻一条
 
 ## 安装
 
-### 从 npm（推荐）
+一条命令即可，无构建步骤、无运行时依赖。
 
 ```bash
-dsh plugin add dsh-live-pricing
+# Web 版
+dsh plugin --profile web add dsh-live-pricing
+
+# 桌面版
+dsh plugin --profile desktop add dsh-live-pricing
 ```
 
-### 从 GitHub
+也可以直接从 GitHub 或本地目录安装：
 
 ```bash
-dsh plugin add git+https://github.com/xqtx9527/dsh-live-pricing.git
-```
-
-### 从本地目录
-
-```bash
-dsh plugin add /path/to/dsh-live-pricing
+dsh plugin --profile web add git+https://github.com/xqtx9527/dsh-live-pricing.git
+dsh plugin --profile web add /path/to/dsh-live-pricing
 ```
 
 > **DSH Desktop 必须重启应用（⌘Q 后重新打开），刷新页面不够。**
@@ -105,14 +104,26 @@ dsh plugin add /path/to/dsh-live-pricing
 卸载：
 
 ```bash
-dsh plugin remove dsh-live-pricing
+dsh plugin --profile web remove dsh-live-pricing
 ```
 
 ## 兼容性
 
-- 在 **DSH Desktop 0.2.0-rc.2（macOS arm64）** 上开发与验证。
+- 目标 profile：`web` 与 `desktop`（在 **DSH Desktop 0.2.0-rc.2 / macOS arm64** 上开发）。
+- 无构建步骤：浏览器产物是手写的 plain JS，直接由 `./client` 导出提供。
 - 只依赖公开契约：`dsh.bundle` / `dsh.client` 清单、`ctx.slots` 席位注册、`ctx.effect`、`ctx.locale`，
-  以及内置的 `tokenUsage` / `modelSelection` 会话投影。不 require 任何 Harness Client 包，只从平台模块表取 `react`。
+  以及内置的 `tokenUsage` / `modelSelection` 会话投影。
+- 不 require 任何 Harness Client 包（不碰 `@deepseek-ai/dsh-client-ui-primitives` 之类），只从平台模块表取 `react`；
+  Harness 升级时受影响的只有主题 token 的观感，不会因内部包改名而崩。
+- **未验证项**：仓库内没有界面截图，因为作者开发环境尚未完成一次应用重启后的目视确认；
+  其余（清单、席位注册路径、bundle 交付链路、计价逻辑）均已验证。
+
+## 权限与外部服务
+
+- **不联网**：价格表、节假日表、时区换算全部内置，插件不做任何网络请求。
+- **不采集数据**：无遥测、无上报、不读写 `document.body` 之外的 DOM，不访问本地文件。
+- **不改动模型输入**：不注册工具、不注入提示词段落，模型的每一次请求与不装该插件时完全一致。
+- 卸载后 Host 行与客户端席位、样式表、词典一并移除。
 
 ## 开发
 
