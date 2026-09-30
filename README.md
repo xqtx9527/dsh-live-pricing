@@ -130,7 +130,7 @@ dsh plugin --profile web remove dsh-live-pricing
 - 只依赖公开契约：`dsh.bundle` / `dsh.client` 清单、`ctx.slots` 席位注册、`ctx.effect`、`ctx.locale`，
   以及内置的 `modelSelection` 会话投影。
 - 不 require 任何 Harness Client 包，只从平台模块表取 `react`；Harness 升级时受影响的只有主题 token 的观感。
-- **未验证项**：仓库内没有界面截图，作者环境尚未完成一次应用重启后的目视确认。
+- **未验证项**：仓库内没有提交界面截图（0.1.x 已在 DSH Desktop 上确认可以正常渲染并刷新，0.2.0 的界面待一次重启后确认）。
 
 ## 开发
 
