@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="DeepSeek live pricing">
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="#247bbf"/>
+  <path d="M22 44V20h10.5c7.2 0 12 4.7 12 12s-4.8 12-12 12H22Zm7-6h3.2c3.4 0 5.4-2.2 5.4-6s-2-6-5.4-6H29v12Z" fill="#fff"/>
+  <circle cx="46" cy="20" r="5" fill="#ffd166"/>
+</svg>

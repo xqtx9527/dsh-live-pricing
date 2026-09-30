@@ -1,0 +1,6 @@
+# DeepSeek 实时价格插件：一条 Loader 行。
+# Host half 只做资源注册（无副作用）；全部逻辑在 Client half（client.js）里，
+# 渲染到会话输入框下方的 conversation.composer.dock 席位。
+- insert:
+    - id: deepseek-pricing
+      name: 'dsh-live-pricing'

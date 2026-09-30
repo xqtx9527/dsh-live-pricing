@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # 无任何运行时依赖，不需要 install。
+      - name: 语法检查
+        run: npm run check
+      - name: 逻辑与渲染回归测试
+        run: npm test

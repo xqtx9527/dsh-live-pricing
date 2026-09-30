@@ -1,0 +1,61 @@
+{
+  "name": "dsh-live-pricing",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 实时价格条：高峰/空闲时段、中国法定节假日、当前单价与本次会话花费",
+  "type": "module",
+  "license": "MIT",
+  "author": "xqtx9527",
+  "icon": "./icon.svg",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "pricing",
+    "cost",
+    "token",
+    "off-peak",
+    "plugin"
+  ],
+  "homepage": "https://github.com/xqtx9527/dsh-live-pricing#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xqtx9527/dsh-live-pricing.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xqtx9527/dsh-live-pricing/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json"
+  ],
+  "scripts": {
+    "test": "node test/render-check.mjs",
+    "check": "node --check index.js && node --check client.js",
+    "prepublishOnly": "npm run check && npm test"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}
