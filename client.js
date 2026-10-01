@@ -315,6 +315,12 @@ window.__ModuleLoader__.load({
       return '¥' + value.toFixed(2);
     }
 
+    /** 明细用四位小数，保证「高峰段 + 空闲段」能加得出总计，不被各自的四舍五入带偏。 */
+    function moneyExact(value) {
+      if (typeof value !== 'number' || !isFinite(value)) return '--';
+      return '¥' + value.toFixed(4);
+    }
+
     function tokens(count) {
       if (typeof count !== 'number' || !isFinite(count)) return '0';
       if (count < 1000) return String(Math.round(count));
@@ -666,9 +672,9 @@ window.__ModuleLoader__.load({
           h('dt', null, tr('label.sessionCost')),
           h('dd', null, costText),
           h('dt', null, tr('cost.peakSeg')),
-          h('dd', null, tokens(bucketsTotal(peakBuckets)) + ' tokens · ' + money(bucketCost(peakBuckets, peakPrice))),
+          h('dd', null, tokens(bucketsTotal(peakBuckets)) + ' tokens · ' + moneyExact(bucketCost(peakBuckets, peakPrice))),
           h('dt', null, tr('cost.offSeg')),
-          h('dd', null, tokens(bucketsTotal(offBuckets)) + ' tokens · ' + money(bucketCost(offBuckets, offPrice))),
+          h('dd', null, tokens(bucketsTotal(offBuckets)) + ' tokens · ' + moneyExact(bucketCost(offBuckets, offPrice))),
           h(
             'dt',
             null,
