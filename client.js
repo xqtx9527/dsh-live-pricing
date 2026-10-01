@@ -4,14 +4,13 @@
  * 渲染到会话输入框下方的 `conversation.composer.dock` 席位（与官方统计条并列），
  * 每秒刷新一次时钟与倒计时。
  *
- * 它回答三件事：
- *   1. 现在（北京时间）是高峰时段还是空闲时段，下一次切换还有多久；
- *   2. 今天是不是中国法定节假日，距下一个节假日还有多久；
- *   3. 当前模型此刻生效的实时单价（缓存命中输入 / 缓存未命中输入 / 输出）。
+ * 条形只显示三样：现在是不是空闲时段、用的是哪个模型、本会话花了多少钱。
+ * 展开后另有：时段原因、距切换倒计时、下一个高峰/空闲、今日时段、法定节假日、
+ * 分时段金额明细、实时单价与两档对照。
  *
- * **本插件不计算、不显示任何消费金额。** 金额口径涉及币种、汇率、峰谷加权与平台
- * 账单细节，极易与实际账单对不上；这里只显示不依赖用量的"费率"，以及不依赖网络
- * 与账号的"时段"。想知道一共花了多少钱，请用官方用量页或专门的计费插件。
+ * 金额的分桶（高峰 / 空闲）由 Host 端投影 `deepseekLivePricing` 提供：它逐条按
+ * assistant/message 的发生时刻归档，折叠整段日志，因此不受客户端窗口分页影响；
+ * 本文件只负责按对应时段的单价乘出结果。
  *
  * 价目来源：
  *   官方机器可读表 —— DSH 内置的 @earendil-works/pi-ai/dist/providers/data/deepseek.json（USD / 百万 token）
@@ -269,6 +268,61 @@ window.__ModuleLoader__.load({
     }
 
     /* ==================================================================
+     * 4b. 会话金额
+     *     分桶数据由 Host 端投影 `deepseekLivePricing` 提供：它按每条
+     *     assistant/message 的**发生时刻**把用量记进高峰桶或空闲桶，
+     *     折叠的是整段日志，因此不受客户端分页影响。
+     * ================================================================== */
+    function numberOr0(value) {
+      return typeof value === 'number' && isFinite(value) && value > 0 ? value : 0;
+    }
+
+    function zeroBuckets() {
+      return { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    }
+
+    function asBuckets(value) {
+      if (value === null || typeof value !== 'object') return zeroBuckets();
+      return {
+        uncachedInputTokens: numberOr0(value.uncachedInputTokens),
+        outputTokens: numberOr0(value.outputTokens),
+        cacheReadTokens: numberOr0(value.cacheReadTokens),
+        cacheWriteTokens: numberOr0(value.cacheWriteTokens),
+      };
+    }
+
+    /** 缓存未命中输入 = 未缓存输入 + 缓存写入（DeepSeek 按未命中价计费）。 */
+    function bucketCost(buckets, price) {
+      const missInput = buckets.uncachedInputTokens + buckets.cacheWriteTokens;
+      return (
+        (buckets.cacheReadTokens / 1e6) * price.cny.hit +
+        (missInput / 1e6) * price.cny.miss +
+        (buckets.outputTokens / 1e6) * price.cny.out
+      );
+    }
+
+    function bucketsTotal(buckets) {
+      return (
+        buckets.uncachedInputTokens + buckets.outputTokens + buckets.cacheReadTokens + buckets.cacheWriteTokens
+      );
+    }
+
+    function money(value) {
+      if (typeof value !== 'number' || !isFinite(value)) return '--';
+      if (value === 0) return '¥0.0000';
+      if (value < 0.01) return '¥' + value.toFixed(6);
+      if (value < 1) return '¥' + value.toFixed(4);
+      return '¥' + value.toFixed(2);
+    }
+
+    function tokens(count) {
+      if (typeof count !== 'number' || !isFinite(count)) return '0';
+      if (count < 1000) return String(Math.round(count));
+      if (count < 1e6) return (count / 1000).toFixed(count < 1e4 ? 2 : 1) + 'K';
+      return (count / 1e6).toFixed(2) + 'M';
+    }
+
+    /* ==================================================================
      * 5. 格式化
      * ================================================================== */
     function priceText(value) {
@@ -307,9 +361,9 @@ window.__ModuleLoader__.load({
       '.dsp_chipOff{color:var(--dsw-alias-state-success-primary)}',
       '.dsp_dot{width:6px;height:6px;border-radius:999px;background:currentColor;flex:none}',
       '.dsp_model{flex:none;color:var(--dsw-alias-label-primary);font-weight:500}',
-      '.dsp_prices{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}',
       '.dsp_grow{flex:1 1 auto;min-width:0}',
-      '.dsp_countdown{flex:none;color:var(--dsw-alias-label-primary);font-weight:500;font-variant-numeric:tabular-nums}',
+      '.dsp_cost{flex:none;color:var(--dsw-alias-label-primary);font-weight:500;font-variant-numeric:tabular-nums}',
+      '.dsp_countdown{flex:none;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
       '.dsp_details{margin-top:6px;padding:8px 12px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);border:0.5px solid var(--dsw-alias-border-l1)}',
       '.dsp_grid{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 14px;margin:0}',
       '.dsp_grid dt{color:var(--dsw-alias-label-secondary);white-space:nowrap}',
@@ -343,6 +397,21 @@ window.__ModuleLoader__.load({
       'label.holiday': '法定节假日',
       'label.nextHoliday': '下一个节假日',
       'label.model': '当前模型',
+      'label.sessionCost': '本会话',
+      'label.costDetail': '本会话金额（分时段）',
+      'label.tokens': '会话 tokens',
+      'cost.exact': '按每条请求的发生时刻分时段计价',
+      'cost.estimate': '估算',
+      'cost.none': '暂无用量记录',
+      'cost.peakSeg': '高峰段',
+      'cost.offSeg': '空闲段',
+      'cost.noProjection': 'Host 端分时段投影不可用，当前按"当前时段单价 × 整段用量"估算，偏差可能较大。',
+      'cost.caliber': '计费口径：缓存未命中输入 = 未缓存输入 + 缓存写入；空闲价 = 高峰价 × 50%；金额按每条请求的发生时刻选择当时单价，折叠整段会话日志，不受窗口分页影响。',
+      'cost.subagent': '子代理是独立会话，各自单独计费，不计入本会话。',
+      'usage.read': '缓存读',
+      'usage.miss': '未缓存输入',
+      'usage.write': '缓存写入',
+      'usage.out': '输出',
       'label.unitPrice': '实时单价（当前时段）',
       'label.bothBands': '高峰 / 空闲 两档对照',
       'label.source': '价目来源',
@@ -363,8 +432,6 @@ window.__ModuleLoader__.load({
       'usdSuffix': ' 美元 / 百万 tokens',
       'split.half': '空闲价为高峰价的 50%',
       'checked': '价格核对时间 ' + PRICE_CHECKED_AT,
-      'noCostTitle': '本插件不计算消费金额',
-      'noCostBody': '金额口径涉及币种、汇率、峰谷加权与平台账单细节，容易与官方账单对不上。想知道一共花了多少钱，请用官方用量页或专门的计费插件。',
       'note.free': '未检测到 DeepSeek 路由，以下单价仅供参考。',
       'note.unknownModel': '该模型未收录价目，以下按 ' + DEFAULT_MODEL + ' 计。',
       'assumed': '（默认模型，会话尚未发起请求）',
@@ -390,6 +457,21 @@ window.__ModuleLoader__.load({
       'label.holiday': 'Holiday',
       'label.nextHoliday': 'Next holiday',
       'label.model': 'Model',
+      'label.sessionCost': 'Session',
+      'label.costDetail': 'Session cost (by band)',
+      'label.tokens': 'Session tokens',
+      'cost.exact': 'priced per request by its own time',
+      'cost.estimate': 'estimated',
+      'cost.none': 'no usage recorded yet',
+      'cost.peakSeg': 'peak',
+      'cost.offSeg': 'off-peak',
+      'cost.noProjection': 'The host band projection is unavailable; showing an estimate at the current band rate, which can be off by a lot.',
+      'cost.caliber': 'Billing: cache-miss input = uncached input + cache write; off-peak = 50% of peak. Each request is priced at the rate in effect at its own time, folded over the whole log, so window paging does not affect it.',
+      'cost.subagent': 'Subagents are separate sessions and are billed separately.',
+      'usage.read': 'cache read',
+      'usage.miss': 'uncached input',
+      'usage.write': 'cache write',
+      'usage.out': 'output',
       'label.unitPrice': 'Live unit price (current band)',
       'label.bothBands': 'Peak / off-peak',
       'label.source': 'Price source',
@@ -410,8 +492,6 @@ window.__ModuleLoader__.load({
       'usdSuffix': ' USD / 1M tokens',
       'split.half': 'off-peak is 50% of peak',
       'checked': 'checked ' + PRICE_CHECKED_AT,
-      'noCostTitle': 'No spend is computed',
-      'noCostBody': 'Money figures depend on currency, FX rate, band weighting and billing details, so they easily disagree with the official bill. Use the official usage page or a dedicated billing plugin for spend.',
       'note.free': 'No DeepSeek route detected; prices are for reference only.',
       'note.unknownModel': 'Unknown model; priced as ' + DEFAULT_MODEL + '.',
       'assumed': ' (default model, no request yet)',
@@ -439,6 +519,9 @@ window.__ModuleLoader__.load({
       }, []);
 
       const selection = useProjection ? useProjection('modelSelection') : undefined;
+      // Host 端按事件时刻分好桶的用量；拿不到时退回 tokenUsage 整体估算。
+      const split = useProjection ? useProjection('deepseekLivePricing') : undefined;
+      const totals = useProjection ? useProjection('tokenUsage') : undefined;
 
       const model = React.useMemo(function () {
         return resolveModel(selection);
@@ -470,6 +553,30 @@ window.__ModuleLoader__.load({
       const holiday = nextHoliday(now);
       const schedule = todaySchedule(now);
 
+      // 金额：优先用 Host 端分时段投影（精确）；缺失时退回整体估算。
+      let cost = null;
+      let costMode = 'none';
+      let peakBuckets = zeroBuckets();
+      let offBuckets = zeroBuckets();
+      if (model.isDeepSeek) {
+        const sampled = split !== null && split !== undefined && typeof split.sampled === 'number' ? split.sampled : 0;
+        if (split !== null && split !== undefined && sampled > 0) {
+          peakBuckets = asBuckets(split.peak);
+          offBuckets = asBuckets(split.offPeak);
+          cost = bucketCost(peakBuckets, peakPrice) + bucketCost(offBuckets, offPrice);
+          costMode = 'exact';
+        } else if (totals !== null && totals !== undefined) {
+          const whole = asBuckets(totals);
+          if (bucketsTotal(whole) > 0) {
+            cost = bucketCost(whole, price);
+            costMode = 'estimate';
+          } else {
+            costMode = 'none';
+          }
+        }
+      }
+      const costText = cost === null ? '--' : money(cost);
+
       const countdownText =
         change === null
           ? ''
@@ -500,26 +607,8 @@ window.__ModuleLoader__.load({
           chipText,
         ),
         h('span', { className: 'dsp_model' }, model.id),
-        h(
-          'span',
-          { className: 'dsp_prices' },
-          model.isDeepSeek
-            ? tr('price.hit') +
-                ' ¥' +
-                priceText(price.cny.hit) +
-                ' · ' +
-                tr('price.miss') +
-                ' ¥' +
-                priceText(price.cny.miss) +
-                ' · ' +
-                tr('price.out') +
-                ' ¥' +
-                priceText(price.cny.out) +
-                tr('perMillion')
-            : tr('note.free'),
-        ),
         h('span', { className: 'dsp_grow' }),
-        countdownText === '' ? null : h('span', { className: 'dsp_countdown' }, countdownText),
+        h('span', { className: 'dsp_cost' }, tr('label.sessionCost') + ' ' + costText),
       );
 
       if (!open) return h('div', { className: 'dsp_root' }, bar);
@@ -567,6 +656,51 @@ window.__ModuleLoader__.load({
         h(
           'dl',
           { className: 'dsp_row' },
+          h(
+            'div',
+            { className: 'dsp_rowTitle' },
+            tr('label.costDetail') +
+              ' · ' +
+              (costMode === 'exact' ? tr('cost.exact') : costMode === 'estimate' ? tr('cost.estimate') : tr('cost.none')),
+          ),
+          h('dt', null, tr('label.sessionCost')),
+          h('dd', null, costText),
+          h('dt', null, tr('cost.peakSeg')),
+          h('dd', null, tokens(bucketsTotal(peakBuckets)) + ' tokens · ' + money(bucketCost(peakBuckets, peakPrice))),
+          h('dt', null, tr('cost.offSeg')),
+          h('dd', null, tokens(bucketsTotal(offBuckets)) + ' tokens · ' + money(bucketCost(offBuckets, offPrice))),
+          h(
+            'dt',
+            null,
+            tr('label.tokens'),
+          ),
+          h(
+            'dd',
+            null,
+            tr('usage.read') +
+              ' ' +
+              tokens(peakBuckets.cacheReadTokens + offBuckets.cacheReadTokens) +
+              ' · ' +
+              tr('usage.miss') +
+              ' ' +
+              tokens(
+                peakBuckets.uncachedInputTokens +
+                  offBuckets.uncachedInputTokens +
+                  peakBuckets.cacheWriteTokens +
+                  offBuckets.cacheWriteTokens,
+              ) +
+              ' · ' +
+              tr('usage.out') +
+              ' ' +
+              tokens(peakBuckets.outputTokens + offBuckets.outputTokens),
+          ),
+          h('dt', { className: 'dsp_note' }, tr('cost.caliber')),
+          costMode === 'estimate' ? h('dt', { className: 'dsp_note dsp_err' }, tr('cost.noProjection')) : null,
+          h('dt', { className: 'dsp_note' }, tr('cost.subagent')),
+        ),
+        h(
+          'dl',
+          { className: 'dsp_row' },
           h('div', { className: 'dsp_rowTitle' }, tr('label.unitPrice') + ' · ' + chipText),
           h('dt', null, tr('price.hit')),
           h('dd', null, '¥' + priceText(price.cny.hit) + tr('perMillion')),
@@ -605,12 +739,6 @@ window.__ModuleLoader__.load({
           h('dt', { className: 'dsp_note' }, PRICE_SOURCE + ' · ' + tr('checked')),
           model.isDeepSeek ? null : h('dt', { className: 'dsp_note dsp_err' }, tr('note.free')),
           model.known ? null : h('dt', { className: 'dsp_note' }, tr('note.unknownModel')),
-        ),
-        h(
-          'dl',
-          { className: 'dsp_row' },
-          h('div', { className: 'dsp_rowTitle' }, tr('noCostTitle')),
-          h('dt', { className: 'dsp_note' }, tr('noCostBody')),
         ),
       );
 

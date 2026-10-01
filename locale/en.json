@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "DeepSeek Peak / Off-peak",
-    "description": "Shows live peak/off-peak status with countdown, Chinese public holidays, and current unit prices. Computes no spend."
+    "title": "DeepSeek Peak / Off-peak + Spend",
+    "description": "A composer-dock strip: peak/off-peak status, the model in use, and this session's spend."
   }
 }

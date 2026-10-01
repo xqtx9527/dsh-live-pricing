@@ -1,6 +1,6 @@
 /**
  * 离线校验：用最小 React 运行时真机执行 client.js 的注册与渲染路径，
- * 断言峰谷时段判定、节假日判定、倒计时与单价展示，并确认不出现任何消费金额。
+ * 断言峰谷时段判定、节假日判定、会话金额（分时段 / 估算兜底）与单价展示。
  *
  * 运行：node test/render-check.mjs
  */
@@ -213,11 +213,26 @@ function loadPlugin(nowMs) {
 /* ================= 渲染 ================= */
 const DEFAULT_SELECTION = { next: { provider: 'deepseek-account', model: 'deepseek-flash' }, lastUsed: null };
 
+/** 取自一次真实会话（210 步）的真实用量，用来验证金额与审计数字。 */
+const REAL_PEAK = { uncachedInputTokens: 179130, outputTokens: 106151, cacheReadTokens: 19732608, cacheWriteTokens: 0 };
+const REAL_OFF = { uncachedInputTokens: 70624, outputTokens: 72315, cacheReadTokens: 34377472, cacheWriteTokens: 0 };
+const REAL_SPLIT = { peak: REAL_PEAK, offPeak: REAL_OFF, sampled: 210 };
+const REAL_TOTALS = {
+  uncachedInputTokens: REAL_PEAK.uncachedInputTokens + REAL_OFF.uncachedInputTokens,
+  outputTokens: REAL_PEAK.outputTokens + REAL_OFF.outputTokens,
+  cacheReadTokens: REAL_PEAK.cacheReadTokens + REAL_OFF.cacheReadTokens,
+  cacheWriteTokens: 0,
+};
+
 function makeProps(options) {
   const selection = options.selection === undefined ? DEFAULT_SELECTION : options.selection;
+  const split = options.split === undefined ? REAL_SPLIT : options.split;
+  const totals = options.totals === undefined ? REAL_TOTALS : options.totals;
   return {
     useProjection: (key) => {
       if (key === 'modelSelection') return selection === null ? undefined : selection;
+      if (key === 'deepseekLivePricing') return split === null ? undefined : split;
+      if (key === 'tokenUsage') return totals === null ? undefined : totals;
       return undefined;
     },
     t: undefined,
@@ -255,49 +270,68 @@ function renderAt(nowMs, options = {}) {
 }
 
 /* ================= 用例 ================= */
-console.log('\n[1] 2026-09-30 09:53 北京时间（周三工作日上午高峰）');
+console.log('\n[1] 条形只显示 时段 + 模型 + 本会话金额');
 {
   const at = Date.parse('2026-09-30T09:53:29+08:00');
-  const { text, registered, injected, effectReturns } = renderAt(at, { expand: true });
+  const { text, registered, injected, effectReturns } = renderAt(at);
   assertEqual('注册席位', registered[0].options.name, 'conversation.composer.dock');
   assertEqual('注册 id', registered[0].options.id, 'deepseek-pricing');
   assertEqual('声明的注入服务', injected.join(','), 'conversation.composer.dock');
-  assertMatch('高峰标记', text, '高峰时段');
-  assertMatch('时段原因', text, '工作日 09:00-12:00');
+  assertMatch('时段', text, '高峰时段');
   assertMatch('模型', text, 'deepseek-flash');
-  assertMatch('高峰缓存命中价', text, '缓存命中输入 ¥0.04');
-  assertMatch('高峰缓存未命中价', text, '缓存未命中输入 ¥2');
-  assertMatch('高峰输出价', text, '输出 ¥8');
-  assertMatch('倒计时到 12:00', text, '距空闲 2 小时 6 分');
-  assertMatch('北京时间行', text, '2026-09-30 周三 09:53:29');
-  assertMatch('下一个高峰 14:00', text, '09-30 14:00');
-  assertMatch('下一个空闲 12:00', text, '09-30 12:00');
-  assertMatch('今日时段表', text, '高峰 09:00-12:00、14:00-18:00');
-  assertMatch('距下一个节假日', text, '国庆节 还有 1 天');
-  assertMatch('下一个节假日具体日期', text, '2026-10-01 国庆节');
-  assertMatch('空闲半价说明', text, '空闲价为高峰价的 50%');
-  assertMatch('高峰档对照', text, '¥0.04 / ¥2 / ¥8');
-  assertMatch('空闲档对照', text, '¥0.02 / ¥1 / ¥4');
-  assertMatch('官方美元价目对照', text, '官方英文价目（当前时段）：$0.006 · $0.3 · $1.2');
-  assertMatch('价目来源', text, 'api-docs.deepseek.com');
-  assertMatch('明确声明不计金额', text, '本插件不计算消费金额');
+  assertMatch('本会话金额 ¥3.04', text, '本会话 ¥3.04');
+  assertAbsent('条形不再列单价', text, '缓存未命中输入');
+  assertAbsent('条形不再有倒计时', text, '距空闲');
   assertEqual('每次注册的效果都返回清理函数', effectReturns.every((v) => typeof v === 'function'), true);
 }
 
-console.log('\n[2] 2026-09-30 12:30 北京时间（工作日午休，空闲半价）');
+console.log('\n[2] 展开后的分时段金额与审计数字');
+{
+  const at = Date.parse('2026-09-30T09:53:29+08:00');
+  const { text } = renderAt(at, { expand: true });
+  assertMatch('精确口径标注', text, '按每条请求的发生时刻分时段计价');
+  assertMatch('高峰段 tokens', text, '20.02M tokens');
+  assertMatch('空闲段 tokens', text, '34.52M tokens');
+  assertMatch('缓存读合计', text, '缓存读 54.11M');
+  assertMatch('未缓存输入合计', text, '未缓存输入 249.8K');
+  assertMatch('输出合计', text, '输出 178.5K');
+  assertMatch('计费口径说明', text, '缓存未命中输入 = 未缓存输入 + 缓存写入');
+  assertMatch('子代理说明', text, '子代理是独立会话');
+}
+
+console.log('\n[3] Host 投影缺失时退回估算并明确标注');
+{
+  const at = Date.parse('2026-09-30T09:53:29+08:00');
+  const { text } = renderAt(at, { expand: true, split: null, totals: REAL_TOTALS });
+  // 整段用量全按当前（高峰）价：54.11M×0.04 + 0.249754M×2 + 0.178466M×8 = 4.0916
+  assertMatch('估算金额', text, '本会话 ¥4.09');
+  assertMatch('标注为估算', text, '估算');
+  assertMatch('给出回退警告', text, 'Host 端分时段投影不可用');
+}
+
+console.log('\n[4] 无任何用量时显示占位符');
+{
+  const at = Date.parse('2026-09-30T09:53:29+08:00');
+  const { text } = renderAt(at, { expand: true, split: null, totals: null });
+  assertMatch('金额占位', text, '本会话 --');
+  assertMatch('暂无用量', text, '暂无用量记录');
+}
+
+console.log('\n[5] 2026-09-30 12:30 北京时间（工作日午休，空闲半价）');
 {
   const at = Date.parse('2026-09-30T12:30:00+08:00');
   const { text } = renderAt(at, { expand: true });
   assertMatch('空闲标记', text, '空闲时段');
   assertMatch('午休原因', text, '工作日午休 12:00-14:00');
-  assertMatch('空闲缓存命中价', text, '缓存命中输入 ¥0.02');
-  assertMatch('空闲缓存未命中价', text, '缓存未命中输入 ¥1');
-  assertMatch('空闲输出价', text, '输出 ¥4');
-  assertMatch('距高峰 1 小时 30 分', text, '距高峰 1 小时 30 分');
-  assertMatch('空闲档美元价', text, '$0.003 · $0.15 · $0.6');
+  assertMatch('距高峰 1 小时 30 分', text, '距高峰 | 1 小时 30 分');
+  assertMatch('空闲缓存命中价', text, '缓存命中输入 | ¥0.02 元 / 百万 tokens');
+  assertMatch('空闲缓存未命中价', text, '缓存未命中输入 | ¥1 元 / 百万 tokens');
+  assertMatch('空闲输出价', text, '输出 | ¥4 元 / 百万 tokens');
+  // 空闲单价下的分时段金额 + 空闲档位
+  assertMatch('金额随时段重算', text, '本会话');
 }
 
-console.log('\n[3] 2026-10-01 10:00 北京时间（国庆节，法定节假日 -> 全天空闲）');
+console.log('\n[6] 2026-10-01 10:00 北京时间（国庆节，法定节假日 -> 全天空闲）');
 {
   const at = Date.parse('2026-10-01T10:00:00+08:00');
   const { text } = renderAt(at, { expand: true });
@@ -305,11 +339,10 @@ console.log('\n[3] 2026-10-01 10:00 北京时间（国庆节，法定节假日 -
   assertMatch('节假日原因', text, '国庆节 · 法定节假日全天');
   assertMatch('今天是节假日', text, '今天是国庆节');
   assertMatch('今日全天空闲', text, '全天空闲 —— 国庆节');
-  assertMatch('空闲价', text, '缓存未命中输入 ¥1');
-  assertMatch('长假期间距高峰按天显示', text, '距高峰 6 天 23 小时');
+  assertMatch('长假倒计时按天', text, '距高峰 | 6 天 23 小时');
 }
 
-console.log('\n[4] 2026-10-10 10:00 北京时间（周六调休上班日，周末仍空闲）');
+console.log('\n[7] 2026-10-10 10:00 北京时间（周六调休上班日，周末仍空闲）');
 {
   const at = Date.parse('2026-10-10T10:00:00+08:00');
   const { text } = renderAt(at, { expand: true });
@@ -318,16 +351,16 @@ console.log('\n[4] 2026-10-10 10:00 北京时间（周六调休上班日，周�
   assertMatch('今日全天空闲（周末）', text, '全天空闲 —— 周末全天');
 }
 
-console.log('\n[5] 2026-09-30 08:00 北京时间（工作日 09:00 前，空闲）');
+console.log('\n[8] 2026-09-30 08:00 北京时间（工作日 09:00 前，空闲）');
 {
   const at = Date.parse('2026-09-30T08:00:00+08:00');
   const { text } = renderAt(at, { expand: true });
   assertMatch('空闲标记', text, '空闲时段');
   assertMatch('09:00 前', text, '工作日 09:00 前');
-  assertMatch('距高峰 1 小时 0 分', text, '距高峰 1 小时 0 分');
+  assertMatch('距高峰 1 小时 0 分', text, '距高峰 | 1 小时 0 分');
 }
 
-console.log('\n[6] 2026-09-25 10:00 北京时间（中秋节，法定节假日 -> 全天空闲）');
+console.log('\n[9] 2026-09-25 10:00 北京时间（中秋节，法定节假日 -> 全天空闲）');
 {
   const at = Date.parse('2026-09-25T10:00:00+08:00');
   const { text } = renderAt(at, { expand: true });
@@ -335,7 +368,7 @@ console.log('\n[6] 2026-09-25 10:00 北京时间（中秋节，法定节假日 -
   assertMatch('空闲标记', text, '空闲时段');
 }
 
-console.log('\n[7] deepseek-v4-pro 高峰单价');
+console.log('\n[10] deepseek-v4-pro 高峰单价');
 {
   const at = Date.parse('2026-09-30T09:53:29+08:00');
   const { text } = renderAt(at, {
@@ -343,22 +376,23 @@ console.log('\n[7] deepseek-v4-pro 高峰单价');
     selection: { next: { provider: 'deepseek-account', model: 'deepseek-v4-pro' }, lastUsed: null },
   });
   assertMatch('pro 模型', text, 'deepseek-v4-pro');
-  assertMatch('pro 高峰未命中价 9', text, '缓存未命中输入 ¥9');
-  assertMatch('pro 高峰输出价 27', text, '输出 ¥27');
-  assertMatch('pro 缓存命中价 0.3', text, '缓存命中输入 ¥0.3');
+  assertMatch('pro 高峰未命中价 9', text, '缓存未命中输入 | ¥9 元 / 百万 tokens');
+  assertMatch('pro 高峰输出价 27', text, '输出 | ¥27 元 / 百万 tokens');
+  assertMatch('pro 缓存命中价 0.3', text, '缓存命中输入 | ¥0.3 元 / 百万 tokens');
 }
 
-console.log('\n[8] 旧模型名 deepseek-v4-flash 归一到 Flash 价');
+console.log('\n[11] 旧模型名 deepseek-v4-flash 归一到 Flash 价');
 {
   const at = Date.parse('2026-09-30T09:53:29+08:00');
   const { text } = renderAt(at, {
+    expand: true,
     selection: { next: { provider: 'deepseek-account', model: 'deepseek-v4-flash' }, lastUsed: null },
   });
   assertMatch('归一后的模型 id', text, 'deepseek-flash');
-  assertMatch('Flash 高峰价', text, '缓存未命中输入 ¥2');
+  assertMatch('Flash 高峰价', text, '缓存未命中输入 | ¥2 元 / 百万 tokens');
 }
 
-console.log('\n[9] 无 modelSelection 投影时用默认模型，仍可渲染');
+console.log('\n[12] 无 modelSelection 投影时用默认模型');
 {
   const at = Date.parse('2026-09-30T09:53:29+08:00');
   const { text } = renderAt(at, { expand: true, selection: null });
@@ -366,16 +400,18 @@ console.log('\n[9] 无 modelSelection 投影时用默认模型，仍可渲染');
   assertMatch('默认模型说明', text, '默认模型，会话尚未发起请求');
 }
 
-console.log('\n[10] 非 DeepSeek 路由提示');
+console.log('\n[13] 非 DeepSeek 路由：不估价');
 {
   const at = Date.parse('2026-09-30T09:53:29+08:00');
   const { text } = renderAt(at, {
+    expand: true,
     selection: { next: { provider: 'pi-ai', model: 'some-other-model' }, lastUsed: null },
   });
   assertMatch('非 DeepSeek 提示', text, '未检测到 DeepSeek 路由');
+  assertMatch('不显示金额', text, '本会话 --');
 }
 
-console.log('\n[11] 未收录模型仍按 Flash 展示并提示');
+console.log('\n[14] 未收录模型仍按 Flash 展示并提示');
 {
   const at = Date.parse('2026-09-30T09:53:29+08:00');
   const { text } = renderAt(at, {
@@ -383,28 +419,16 @@ console.log('\n[11] 未收录模型仍按 Flash 展示并提示');
     selection: { next: { provider: 'deepseek-account', model: 'deepseek-future' }, lastUsed: null },
   });
   assertMatch('未收录提示', text, '该模型未收录价目');
-  assertMatch('按 Flash 计', text, '缓存未命中输入 ¥2');
+  assertMatch('按 Flash 计', text, '缓存未命中输入 | ¥2 元 / 百万 tokens');
 }
 
-console.log('\n[12] 任何状态下都不出现消费金额');
+console.log('\n[15] 金额始终带 ¥ 且不出现美元符号');
 {
-  const cases = ['2026-09-30T09:53:29+08:00', '2026-09-30T12:30:00+08:00', '2026-10-01T10:00:00+08:00'];
-  for (const iso of cases) {
+  for (const iso of ['2026-09-30T09:53:29+08:00', '2026-10-01T10:00:00+08:00']) {
     const { text } = renderAt(Date.parse(iso), { expand: true });
-    for (const banned of ['会话花费', '已花', '花费 ¥', '共 ¥', '总费用']) {
-      assertAbsent('不含「' + banned + '」@' + iso, text, banned);
-    }
+    assertMatch('带人民币符号 @' + iso, text, '本会话 ¥');
+    assertAbsent('条形不出现 $ 金额 @' + iso, text, '本会话 $');
   }
-}
-
-console.log('\n[13] 折叠态只显示一条精简信息');
-{
-  const at = Date.parse('2026-09-30T09:53:29+08:00');
-  const { text } = renderAt(at);
-  assertMatch('折叠态含时段', text, '高峰时段');
-  assertMatch('折叠态含单价', text, '缓存未命中输入 ¥2');
-  assertMatch('折叠态含倒计时', text, '距空闲');
-  assertAbsent('折叠态不含详情面板', text, '本插件不计算消费金额');
 }
 
 console.log('\n---- 共 ' + checks + ' 项检查，失败 ' + failures + ' 项 ----');
