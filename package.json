@@ -1,7 +1,7 @@
 {
   "name": "dsh-live-pricing",
-  "version": "0.3.0",
-  "description": "DeepSeek Harness 峰谷时段条：输入框下方常驻显示是否空闲时段、当前模型与本会话消费金额",
+  "version": "0.4.0",
+  "description": "DeepSeek Harness 峰谷时段条：输入框下方常驻显示是否空闲时段、当前模型与本会话消费金额，点开看当前实时单价",
   "type": "module",
   "license": "MIT",
   "author": "xqtx9527",
