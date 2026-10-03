@@ -1,5 +1,7 @@
 # Codex Remote Fix
 
+![Codex 远程修复介绍](assets/intro.jpg)
+
 用于 macOS 的 Codex 技能与排查指南。先诊断，再根据证据修复 Remote Control 无法启用的问题。
 
 适用症状：点击“控制这台 Mac → 允许”后提示“无法启用远程控制”，或“请确保仅有一个 ChatGPT 实例在运行”。相同提示可能有不同原因，本方案按证据逐步处理。
