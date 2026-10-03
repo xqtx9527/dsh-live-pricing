@@ -1,6 +1,6 @@
 # dsh-live-pricing
 
-![DeepSeek Harness · 峰谷定价一眼可见 · 小秦同学](assets/deepseek-pricing-hero.png)
+![DeepSeek，现在用便宜吗？空闲时段半价，高峰时段原价 · 小秦同学](assets/deepseek-pricing-hero.png)
 
 [![npm](https://img.shields.io/npm/v/dsh-live-pricing.svg?style=flat-square)](https://www.npmjs.com/package/dsh-live-pricing)
 [![CI](https://github.com/xqtx9527/dsh-live-pricing/actions/workflows/ci.yml/badge.svg)](https://github.com/xqtx9527/dsh-live-pricing/actions)
