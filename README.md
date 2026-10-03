@@ -1,5 +1,7 @@
 # dsh-live-pricing
 
+![DeepSeek 实时价格 · 小秦同学](assets/deepseek-pricing-hero.png)
+
 [![npm](https://img.shields.io/npm/v/dsh-live-pricing.svg?style=flat-square)](https://www.npmjs.com/package/dsh-live-pricing)
 [![CI](https://github.com/xqtx9527/dsh-live-pricing/actions/workflows/ci.yml/badge.svg)](https://github.com/xqtx9527/dsh-live-pricing/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
